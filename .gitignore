@@ -1,0 +1,5 @@
+__pycache__/
+.ipynb_checkpoints/
+artifacts/
+*.pyc
+secom_legacy_mask_EVALUATOR_ONLY.csv
