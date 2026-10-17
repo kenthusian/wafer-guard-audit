@@ -45,7 +45,7 @@ Headless (re-executes and overwrites the saved outputs):
 ```bash
 jupyter nbconvert --to notebook --execute --inplace wafer_guard_fixed.ipynb
 ```
-A full run takes a few minutes on a laptop CPU. It writes `artifacts/` (model weights, fitted preprocessor, `metrics.json`).
+A full run takes about **60 minutes** on a laptop CPU. Most of that is the Stage B CV grid; Stage A alone (sections 0–11) takes a few minutes. It writes `artifacts/` (the selected fitted pipeline and `metrics.json`).
 
 ## Testing / verification
 - **Built-in checks:** the notebook includes assertions that fail the run if any of these break:
@@ -68,11 +68,16 @@ A full run takes a few minutes on a laptop CPU. It writes `artifacts/` (model we
    - The test window is scored once at its natural prevalence. PR-AUC is primary, with bootstrap CIs.
    - Robustness: 5 seeds, a logistic-regression baseline, and a 5-fold walk-forward backtest.
 
+6. **Stage B tuning (sections 12–15).**
+   - A grid fixed in advance (SAE sizes and regularisation, logistic regression, optional top-60 feature screen) is scored by 4-fold walk-forward CV inside the train+val history only.
+   - The CV winner is refit and scored once on the test window. That model is logistic regression, top-60 features.
+   - A SMOTE-on-train sensitivity check is included and clearly labelled.
+
 ## Limitations
 - Only about 104 defects in total; validation and test windows hold 11 and 17. Metrics have wide confidence intervals.
 - The defect rate drifts from 1 % to 15 % across time, so no causal test window sits at exactly 6.6 %. `AUDIT.md` also re-expresses precision and F1 at 6.64 % analytically.
-- The repaired model is close to random and does not beat a logistic-regression baseline. **It should not be deployed** (see `AUDIT.md`).
+- The repaired SAE is close to random. The best honest model (CV-selected logistic regression) reaches test F1 0.19 and PR-AUC 0.22. **Neither should be deployed** (see `AUDIT.md`).
 - `artifacts/preprocessor.joblib` pickles a class defined in the notebook. Loading it elsewhere requires that class definition.
 
 ## External libraries
-PyTorch, scikit-learn, pandas, NumPy, joblib. imbalanced-learn is used only to reproduce the original SMOTE bug. Jupyter and nbclient are used to execute the notebook. No pretrained models or external assets.
+PyTorch, scikit-learn, pandas, NumPy, joblib. imbalanced-learn is used to reproduce the original SMOTE bug and for the SMOTE-on-train sensitivity check. Jupyter and nbclient are used to execute the notebook. No pretrained models or external assets.

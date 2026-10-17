@@ -1,9 +1,33 @@
 # WAFER-GUARD pre-release audit
 
 **Recommendation: NO-GO.** The reported F1 ≥ 0.90 is an artifact of three silent defects.
-Measured honestly, on a later time window at natural defect prevalence, the repaired model scores **F1 = 0.136 and PR-AUC = 0.070**. A random scorer gets PR-AUC 0.054 on that window.
+Measured honestly, on a later time window at natural defect prevalence, the repaired supervised autoencoder scores **F1 = 0.136** (precision 0.085, recall 0.353) and **PR-AUC = 0.070**. A random scorer gets PR-AUC 0.054 on that window.
+A leakage-safe tuning round raised the best result to **F1 = 0.191, PR-AUC = 0.219**: cross-validation picked logistic regression on 60 train-selected features. That is still far below the 0.90 gate.
 
 All numbers below come from `wafer_guard_fixed.ipynb` (repaired pipeline) and `evidence/reproduce_bugs.py` (bug reproductions; output in `evidence/evidence_output.txt`). Seed is 1337 unless stated, on CPU.
+
+## Answers to the required audit questions
+**Q1. What were the three silent bugs, and how were they fixed?**
+1. **Data leakage.**
+   - *Bug:* the imputer and scaler were fit on all rows, SMOTE ran before the split, and the split was random in time. The model was then graded on a 50 % synthetic test set.
+   - *Fix:* a chronological split, with every statistic fit on train only, no pre-split SMOTE, and a test set left at natural prevalence. (Finding 1)
+2. **Corrupted loss gradients.**
+   - *Bug:* `[B,F] − [B,1,F]` silently broadcast to `[B,B,F]`, so the decoder learned the batch mean.
+   - *Fix:* `[B,F]` tensors, shape asserts, and a masked MSE. (Finding 2)
+3. **Invariant blindness.**
+   - *Bug:* the PS-L sentinel `sensor_0 = 0.0` and the firmware codes in `sensor_1` were scaled and imputed as real readings.
+   - *Fix:* an `is_legacy` flag and one-hot codes, with those slots kept out of every statistic and out of the loss. (Finding 3)
+
+**Q2. What are the true metrics at natural prevalence?**
+
+These are on the untouched chronological test window: 314 wafers, 17 defects, 5.41 % prevalence.
+
+| model | F1 | precision | recall | PR-AUC (random = 0.054) |
+|---|---|---|---|---|
+| Repaired supervised autoencoder (original architecture and HP) | 0.136 | 0.085 | 0.353 | 0.070 |
+| After the leakage-safe tuning round (CV-selected logistic regression) | 0.191 | 0.160 | 0.235 | 0.219 |
+
+Re-expressed at the dataset-wide 6.64 % prevalence, F1 is 0.159 and 0.211. **Both fail the 0.90 gate: NO-GO.**
 
 ## Findings, ranked by severity
 
@@ -89,13 +113,40 @@ The defect rate drifts from 14 % in the first fifth of the data to 3–5 % later
 - **5 seeds:** PR-AUC 0.085 ± 0.017, ROC-AUC 0.590 ± 0.059, F1 0.032 ± 0.071. In 4 of 5 seeds the validation threshold (picked from only 11 validation defects) did not transfer, and F1 = 0.
 - **Walk-forward backtest:** 5 expanding-window folds, refitting on the past each time; 784 wafers, 37 defects, prevalence 4.72 %. Results: PR-AUC 0.059, ROC-AUC 0.581, F1 0.082, precision 0.048, recall 0.270.
 
+`classification_report` for the repaired SAE on the test window (threshold 0.0194):
+
+```
+              precision    recall  f1-score   support
+        pass     0.9547    0.7811    0.8593       297
+      defect     0.0845    0.3529    0.1364        17
+    accuracy                         0.7580       314
+```
+
 **Why PR-AUC.** At about 5 % prevalence, ROC-AUC and accuracy flatter a classifier. PR-AUC has a clear reference point (random = prevalence) and tracks how useful an alarm is to a fab engineer. F1 is reported at a threshold chosen without touching the test data.
 
+## Stage B: leakage-safe tuning (notebook sections 12–14b)
+The repaired SAE overfits: training BCE falls to about 0.002 while validation PR-AUC stays flat. So one bounded tuning round was run.
+
+**Protocol.** The grid was fixed in advance, and the test window was not used for selection.
+- Selection used a 4-fold expanding-window CV inside the train+val history only (627 scored wafers, 22 defects). Each fold refits the preprocessor, a top-k correlation feature screen and the model on past wafers only.
+- The grid had 38 configurations: SAE hidden {64, 128} × latent {8, 16} × weight decay {1e-3, 1e-2} × epochs {10, 25} × features {all, top-60}, with dropout 0.3 and a 3-seed ensemble in CV; plus class-weighted logistic regression with C {1e-3, 1e-2, 1e-1} × features {all, top-60}.
+- The threshold comes from the pooled CV predictions. The winner is refit on the full history (with a 5-seed ensemble for an SAE) and scored **once** on the test window.
+
+| Stage B result (test window, 5.41 % prevalence) | PR-AUC | ROC-AUC | F1 | precision / recall | TN/FP/FN/TP |
+|---|---|---|---|---|---|
+| **CV-selected: logistic regression, C = 0.1, top-60 features** (CV PR-AUC 0.116) | **0.219** [0.057, 0.432] | 0.556 | **0.191** [0.047, 0.348] | 0.160 / 0.235 | 276 / 21 / 13 / 4 |
+| Best SAE by CV (64-16, wd 1e-2, 25 epochs, top-60; CV PR-AUC 0.073), reference only | 0.129 [0.057, 0.326] | 0.620 | 0.263 [0.074, 0.444] | 0.238 / 0.294 | 281 / 16 / 12 / 5 |
+
+- Re-expressed at π = 6.64 %, the selected model reaches precision 0.191 and F1 0.211.
+- The SAE row is reported for transparency only. It had the higher test F1, but it was **not** selected, and choosing it now would mean selecting on the test set. With 17 test defects, the F1 difference is 1 extra true positive, well inside the CIs.
+- **SMOTE sensitivity (grid v2).** A reviewer asked whether SMOTE helps when applied to training rows only, inside each fold. All 38 configurations were re-run with that SMOTE. *These were added after the v1 test result had been seen, so they are a sensitivity check, not the primary result.* The best SMOTE configuration had CV PR-AUC 0.111 (logistic regression) and 0.091 (SAE), against 0.116 without SMOTE. CV selection was **unchanged**, so SMOTE gave no benefit here.
+
 ## Interpretation, residual risks, recommendation
-- Once leakage is removed, the model is only marginally better than random. It does **not** beat a regularised logistic regression. The 940 training wafers contain only 76 defects, and the training classification loss collapses to about 0.002 by epoch 10 while validation PR-AUC stays flat. The network is overfitting badly.
+- With leakage removed, the repaired SAE is only marginally better than random. A regularised linear model on a small, train-selected feature set is the best honest option found, at about 4× the random PR-AUC. That is still far too weak for automatic dispositioning. The 940 training wafers contain only 76 defects.
 - **Residual risks:**
   - Strong label and covariate drift over time (prevalence 1–15 % per decile).
   - Tiny validation and test defect counts (11 and 17), which make threshold choice unstable and CIs wide.
   - Legacy PS-L wafers show 0 defects in this sample. The model can learn "legacy ⇒ pass", which is a coincidence of this dataset, not physics.
   - The preprocessor pickle depends on the notebook's class definition.
+  - Weight decay had almost no effect in the grid (pairs differing only in weight decay score identically to 3 decimals). That dimension effectively wasn't searched.
 - **Decision: NO-GO for Friday.** Possible next steps: more labelled history; per-tool monitoring; feature selection or a simpler model with proper time-series CV; calibrated alerting at an agreed precision; and a drift monitor on prevalence and on the legacy-code mix.

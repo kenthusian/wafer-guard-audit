@@ -3,7 +3,7 @@ scikit-learn>=1.4
 pandas>=2.0
 numpy>=1.26
 joblib>=1.3
-# only needed for evidence/reproduce_bugs.py (re-creates the original SMOTE pipeline)
+# SMOTE: original-bug reproduction + SMOTE-on-train sensitivity grid
 imbalanced-learn>=0.12
 # to execute the notebook headless / in Jupyter
 jupyter
