@@ -3,8 +3,8 @@ scikit-learn>=1.4
 pandas>=2.0
 numpy>=1.26
 joblib>=1.3
-# SMOTE: original-bug reproduction + SMOTE-on-train sensitivity grid
-imbalanced-learn>=0.12
-# to execute the notebook headless / in Jupyter
+imbalanced-learn>=0.12   # SMOTE (bug reproduction + SMOTE-on-train check)
+matplotlib>=3.7
+pytest>=7.0
 jupyter
 nbclient

@@ -1,83 +1,118 @@
-# WAFER-GUARD: audited and repaired wafer anomaly detector
+# WAFER-GUARD audit: fixing a wafer defect detector
 
-This repo contains a corrected PyTorch supervised-autoencoder pipeline for detecting defective wafers in Fab-7 in-line telemetry (a SECOM-derived dataset).
-The original notebook reported F1 ≥ 0.90. That score came from data leakage, a silent tensor-broadcasting bug in the loss, and mishandled legacy probe-station data.
-**See [`AUDIT.md`](AUDIT.md) for the findings, the evidence and the honest metrics.**
+This is my submission for the Fab-7 ML audit task. We were given a PyTorch notebook (`bnypi.ipynb`) that trains a supervised autoencoder to find defective wafers. It claimed F1 = 0.99, but that number turned out to be fake because of 3 silent bugs. I found the bugs, fixed them, and re-measured the model honestly.
 
-## Repository layout
-| path | purpose |
+**Short version:** with the bugs fixed, the real F1 at natural defect rate is about **0.14** (repaired autoencoder) and **0.19** after some careful tuning. Both are nowhere near the 0.90 release gate, so my recommendation is **don't ship it**. Details are in [AUDIT.md](AUDIT.md).
+
+![Reported F1 vs honest F1](figures/f1_before_after.png)
+
+## The 3 bugs (quick summary)
+
+1. **Data leakage.** The imputer and scaler were fit on the whole dataset, SMOTE was run before the train/test split, and the split was random in time. So the test set was full of synthetic copies of training wafers, and it was 50% defects instead of ~6.6%.
+2. **Broadcasting bug in the loss.** `batch_x` had shape `[B, 1, F]` and the reconstruction had shape `[B, F]`, so `reconstructed - batch_x` quietly became a `[B, B, F]` tensor. No error, but the autoencoder was learning to output the batch average.
+3. **Legacy probe station ignored.** On wafers from Probe Station PS-L, `sensor_0 = 0.0` is just a marker and `sensor_1` is an error code (100/200/300). The original treated both as real measurements, which messed up the scaling of `sensor_1` (std went from 80 to 675).
+
+## What's in the repo
+
+| File | What it is |
 |---|---|
-| `wafer_guard_fixed.ipynb` | repaired, executed pipeline (outputs saved) |
-| `AUDIT.md` | findings, repairs, measured metrics, go/no-go |
-| `evidence/reproduce_bugs.py` | standalone script reproducing each original bug with numbers |
-| `evidence/evidence_output.txt` | output of the script above |
-| `bnypi.ipynb` | original notebook, unchanged, for reference |
-| `secom_telemetry_modified.csv` | input dataset (1567 wafers × 590 sensors, `label`, `timestamp`) |
-| `requirements.txt` | Python dependencies |
+| `wafer_guard_fixed.ipynb` | the fixed notebook (already run, outputs saved) |
+| `wafer_utils.py` | the actual code: preprocessing, legacy handling, model, loss, metrics |
+| `tests/test_wafer_utils.py` | pytest tests for the fixes |
+| `AUDIT.md` | the audit write-up: bugs, evidence, final metrics |
+| `evidence/reproduce_bugs.py` | script that reproduces each original bug with numbers |
+| `evidence/evidence_output.txt` | output of that script |
+| `results/` | CV results table + final metrics (json) |
+| `figures/` | the charts from the notebook |
+| `bnypi.ipynb` | the original notebook, unchanged, for comparison |
+| `secom_telemetry_modified.csv` | the dataset (1567 wafers, 590 sensors) |
 
-`secom_legacy_mask_EVALUATOR_ONLY.csv` is **not** used by the pipeline. Legacy wafers are detected by rule (`sensor_0 == 0.0`). The evidence script reads the mask, if present, only to verify that the rule matches it.
+## Setup
 
-## Prerequisites
-- Python 3.10+ (developed on 3.13, Windows 11, CPU only; no GPU needed)
-- About 2 GB of disk space for PyTorch
+You need Python 3.10 or newer. No GPU needed, everything runs on CPU.
 
-## Installation
 ```bash
-git clone <this-repo-url> && cd <repo>
+git clone https://github.com/kenthusian/wafer-guard-audit.git
+cd wafer-guard-audit
 python -m venv .venv
-.venv/Scripts/activate        # Windows; use `source .venv/bin/activate` on Linux/macOS
+```
+
+Activate the venv (`.venv\Scripts\activate` on Windows, `source .venv/bin/activate` on Mac/Linux), then:
+
+```bash
 pip install -r requirements.txt
 ```
 
-## Configuration
-All hyperparameters are in the `HP` dict in notebook section 0. They are the same model and optimiser settings as the original, so the comparison isolates the bug fixes. Other settings in that dict:
-- `split`: chronological train/val/test fractions
-- `max_missing`, `indicator_min_missing`: missing-data policy
-- `z_clip`: robust clipping of scaled values
+## Running it
 
-`LEGACY_SENTINEL` and `LEGACY_CODES` (section 3) define the PS-L tool-matching rule.
-The input CSV must sit next to the notebook.
+Open the notebook and run all cells:
 
-## Execution
-Interactive: `jupyter notebook wafer_guard_fixed.ipynb`, then *Run All*.
+```bash
+jupyter notebook wafer_guard_fixed.ipynb
+```
 
-Headless (re-executes and overwrites the saved outputs):
+Or run it from the command line:
+
 ```bash
 jupyter nbconvert --to notebook --execute --inplace wafer_guard_fixed.ipynb
 ```
-A full run takes about **60 minutes** on a laptop CPU. Most of that is the Stage B CV grid; Stage A alone (sections 0–11) takes a few minutes. It writes `artifacts/` (the selected fitted pipeline and `metrics.json`).
 
-## Testing / verification
-- **Built-in checks:** the notebook includes assertions that fail the run if any of these break:
-  - chronological ordering (no training timestamp at or after a validation/test timestamp)
-  - finite features after preprocessing
-  - `[B,F]` tensor shapes in `forward()` and the loss
-  - a regression cell proving the original `[B,1,F]` broadcast is now rejected
-- **Bug reproduction:** `python evidence/reproduce_bugs.py` re-creates the original defects and the leakage ablation (about 2 minutes).
-- **Determinism:** seeds are fixed, `torch.use_deterministic_algorithms(True)` is set, and everything runs on CPU, so re-runs reproduce the numbers in `AUDIT.md`.
+It takes about 3 minutes on my laptop. The dataset CSV has to be in the same folder as the notebook.
 
-## Architecture and key decisions
-1. **Chronological split, 60/20/20.** The fab drifts, so a random split lets the future train the past.
-2. **`CausalPreprocessor`.** Fit on train only and frozen. It drops constant or mostly missing channels, z-scores with train statistics, clips to ±10σ, imputes the train median, and adds missing-indicators.
-3. **Legacy PS-L handling.**
-   - Stateless and row-wise: `is_legacy` flag plus one-hot firmware codes (100/200/300/unknown).
-   - Sentinel and code slots are excluded from all statistics and masked out of the reconstruction loss.
-4. **Supervised autoencoder.** Same encoder, decoder and head as the original. The loss is a masked reconstruction MSE plus `BCEWithLogits(pos_weight)`, with explicit shape assertions. SMOTE is removed.
-5. **Threshold and evaluation.**
-   - Early stopping and the decision threshold use the validation window only.
-   - The test window is scored once at its natural prevalence. PR-AUC is primary, with bootstrap CIs.
-   - Robustness: 5 seeds, a logistic-regression baseline, and a 5-fold walk-forward backtest.
+To reproduce the original bugs (takes ~2 min):
 
-6. **Stage B tuning (sections 12–15).**
-   - A grid fixed in advance (SAE sizes and regularisation, logistic regression, optional top-60 feature screen) is scored by 4-fold walk-forward CV inside the train+val history only.
-   - The CV winner is refit and scored once on the test window. That model is logistic regression, top-60 features.
-   - A SMOTE-on-train sensitivity check is included and clearly labelled.
+```bash
+python evidence/reproduce_bugs.py
+```
+
+## Tests
+
+```bash
+pytest -q
+```
+
+The tests check:
+- the legacy rule finds exactly the 146 PS-L wafers and their codes
+- the error codes and the 0.0 marker never go into the mean/std used for scaling
+- the preprocessor only learns from training rows (I change the test rows to garbage and check nothing changes)
+- the train/val/test split is in time order
+- the model rejects `[B, 1, F]` input and the loss rejects mismatched shapes
+- masked (missing/placeholder) cells don't affect the reconstruction loss
+
+## How I fixed things
+
+**Split by time.** I sort by timestamp and use the oldest 60% for training, the next 20% for validation, and the newest 20% for testing. The fab drifts over time (the defect rate goes from 15% down to 2%), so a random split would let the model learn from the future.
+
+**Preprocessing only learns from train.** The `Preprocessor` class in `wafer_utils.py` learns the means, stds and medians from the training rows only, then applies them to val/test. I removed SMOTE and used `pos_weight` in the loss instead to handle the class imbalance.
+
+**Legacy wafers.** I add an `is_legacy` column and one-hot columns for the 3 error codes. The `sensor_0` / `sensor_1` values on those wafers are left out of all the statistics. They get a placeholder of 0, but the mask makes sure the autoencoder is never trained to rebuild them.
+
+**Shapes.** The data stays `[B, F]` the whole way. The model and the loss both have asserts, so a shape mismatch now crashes instead of silently broadcasting.
+
+**Evaluation.** I pick the threshold on the validation set and run the test set once. I use PR-AUC as the main metric because with only ~5% defects, accuracy and ROC-AUC look good even for bad models. The test window happens to have 5.4% defects, so I also convert precision/F1 to the dataset-wide 6.6% using the model's true and false positive rates.
+
+**Tuning (Part B).** The original-size network overfits badly. So I tried 14 settings (a smaller autoencoder, logistic regression, using only the top 60 features) using walk-forward cross-validation on the training history only. The best one by CV was logistic regression with the top 60 features. That got tested once at the end.
+
+## Results
+
+On the test window (314 wafers, 17 defects, 5.4% defect rate):
+
+| Model | F1 | Precision | Recall | PR-AUC |
+|---|---|---|---|---|
+| Original notebook (leaky, 50/50 test set) | 0.992 | - | - | 1.000 |
+| Repaired autoencoder (original settings) | 0.136 | 0.085 | 0.353 | 0.070 |
+| Tuned, picked by CV (logistic regression) | 0.190 | 0.160 | 0.235 | 0.219 |
+| Random guessing | - | - | - | 0.054 |
+
+![Precision-recall curves](figures/pr_curves_test.png)
 
 ## Limitations
-- Only about 104 defects in total; validation and test windows hold 11 and 17. Metrics have wide confidence intervals.
-- The defect rate drifts from 1 % to 15 % across time, so no causal test window sits at exactly 6.6 %. `AUDIT.md` also re-expresses precision and F1 at 6.64 % analytically.
-- The repaired SAE is close to random. The best honest model (CV-selected logistic regression) reaches test F1 0.19 and PR-AUC 0.22. **Neither should be deployed** (see `AUDIT.md`).
-- `artifacts/preprocessor.joblib` pickles a class defined in the notebook. Loading it elsewhere requires that class definition.
 
-## External libraries
-PyTorch, scikit-learn, pandas, NumPy, joblib. imbalanced-learn is used to reproduce the original SMOTE bug and for the SMOTE-on-train sensitivity check. Jupyter and nbclient are used to execute the notebook. No pretrained models or external assets.
+- There are only 104 defects in the whole dataset, and just 17 in the test window, so all of these numbers are pretty noisy.
+- The defect rate changes a lot over time, so the test window doesn't sit at exactly 6.6%.
+- All 146 legacy wafers in this data passed, and the model learned "legacy = pass" (it's actually its biggest weight). If a broken PS-L wafer shows up in real life, this model would probably miss it.
+- The tuned model that won is logistic regression, not the autoencoder. I kept the autoencoder results too, since that's what the task asked to repair.
+
+## Libraries used
+
+PyTorch, scikit-learn, pandas, NumPy, joblib, imbalanced-learn (SMOTE), matplotlib, pytest, Jupyter.
