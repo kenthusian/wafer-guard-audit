@@ -1,8 +1,6 @@
-"""Reproducible evidence for the three silent defects in the original notebook (bnypi.ipynb).
-
-Run from the repo root:  python evidence/reproduce_bugs.py
-Writes evidence/evidence_output.txt as well as printing to stdout.
-"""
+# reproduce_bugs.py
+# Re-creates the 3 bugs from the original notebook (bnypi.ipynb) and prints the numbers
+# I quote in AUDIT.md. Run it from the repo folder:  python reproduce_bugs.py  (~2 min)
 import sys, random
 from pathlib import Path
 import numpy as np
@@ -16,10 +14,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, average_precision_score
 from imblearn.over_sampling import SMOTE
 
-ROOT = Path(__file__).resolve().parents[1]
-OUT = open(ROOT / "evidence" / "evidence_output.txt", "w", encoding="utf-8")
-def log(*a):
-    s = " ".join(str(x) for x in a); print(s); OUT.write(s + "\n"); OUT.flush()
+ROOT = Path(__file__).resolve().parent
+log = print
 
 SEED = 1337
 def seed_all(s=SEED):
@@ -169,4 +165,3 @@ log(f"{'scenario':<55} {'F1@0.5':>7} {'AP':>7} {'test prev':>9}")
 for r in rows:
     log(f"{r[0]:<55} {r[1]:7.3f} {r[2]:7.3f} {r[3]:9.2%}")
 log("\nAP of a random classifier equals the test prevalence.")
-OUT.close()

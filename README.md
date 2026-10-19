@@ -16,16 +16,15 @@ This is my submission for the Fab-7 ML audit task. We were given a PyTorch noteb
 
 | File | What it is |
 |---|---|
-| `wafer_guard_fixed.ipynb` | the fixed notebook (already run, outputs saved) |
+| `wafer_guard_fixed.ipynb` | **start here**: the fixed notebook (already run, outputs saved) |
+| `AUDIT.md` | the audit write-up: the 3 bugs, evidence, final metrics |
 | `wafer_utils.py` | the actual code: preprocessing, legacy handling, model, loss, metrics |
-| `tests/test_wafer_utils.py` | pytest tests for the fixes |
-| `AUDIT.md` | the audit write-up: bugs, evidence, final metrics |
-| `evidence/reproduce_bugs.py` | script that reproduces each original bug with numbers |
-| `evidence/evidence_output.txt` | output of that script |
-| `results/` | CV results table + final metrics (json) |
+| `reproduce_bugs.py` | script that re-creates each original bug and prints the numbers |
+| `tests/` | pytest tests for the fixes |
 | `figures/` | the charts from the notebook |
-| `bnypi.ipynb` | the original notebook, unchanged, for comparison |
 | `secom_telemetry_modified.csv` | the dataset (1567 wafers, 590 sensors) |
+
+The original notebook (`bnypi.ipynb`) isn't included since it came with the task.
 
 ## Setup
 
@@ -62,8 +61,23 @@ It takes about 3 minutes on my laptop. The dataset CSV has to be in the same fol
 To reproduce the original bugs (takes ~2 min):
 
 ```bash
-python evidence/reproduce_bugs.py
+python reproduce_bugs.py
 ```
+
+## Settings
+
+There are no config files. The settings are plain variables you can edit:
+
+- **Top of `wafer_utils.py`:**
+  - `LEGACY_SENTINEL` and `LEGACY_CODES`: the PS-L rule (`sensor_0 == 0.0`, codes 100/200/300).
+  - `MAX_MISSING`: drop a sensor if more than 50% of the training rows are missing.
+  - `MIN_MISSING_FLAG`: add a "was missing" column if at least 1% are missing.
+  - `Z_CLIP`: clip scaled values at ±10.
+  - `BATCH_SIZE`, `LEARNING_RATE` and `SEED`.
+- **In the notebook:**
+  - Section 2: the train/val/test split, 60/20/20.
+  - `wu.train_sae(...)` in section 6: the model size and training length. The defaults match the original notebook.
+  - `GRID` in section 8: the settings tried in the tuning round.
 
 ## Tests
 

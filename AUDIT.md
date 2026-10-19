@@ -2,7 +2,7 @@
 
 **Recommendation: NO-GO.** The F1 of 0.99 reported by the original notebook is caused by 3 silent bugs. After fixing them, the model scores **F1 = 0.136** at the natural defect rate. My best honest attempt at improving it gets **F1 = 0.19**. Both are far below the 0.90 release gate.
 
-Numbers come from `wafer_guard_fixed.ipynb` and `evidence/reproduce_bugs.py` (output saved in `evidence/evidence_output.txt`).
+Numbers come from `wafer_guard_fixed.ipynb` and `reproduce_bugs.py` (run it to print the bug evidence).
 
 ## Q1. The three silent bugs and how I fixed them
 
