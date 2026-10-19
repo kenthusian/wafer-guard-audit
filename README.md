@@ -79,6 +79,8 @@ The tests check:
 - the model rejects `[B, 1, F]` input and the loss rejects mismatched shapes
 - masked (missing/placeholder) cells don't affect the reconstruction loss
 
+The evaluator mask file (`secom_legacy_mask_EVALUATOR_ONLY.csv`) isn't in this repo. If you put it in the root folder, one extra test checks that my `sensor_0 == 0.0` rule finds exactly the same 146 wafers. Without it, that test is skipped. The pipeline itself never reads that file.
+
 ## How I fixed things
 
 **Split by time.** I sort by timestamp and use the oldest 60% for training, the next 20% for validation, and the newest 20% for testing. The fab drifts over time (the defect rate goes from 15% down to 2%), so a random split would let the model learn from the future.
